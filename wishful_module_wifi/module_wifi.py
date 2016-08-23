@@ -22,15 +22,17 @@ class WifiModule(wishful_module.AgentModule):
         super(WifiModule, self).__init__()
         self.log = logging.getLogger('wifi_module.main')
         self.interface = "wlan0"
+        self.wlan_interface = "wlan0"
         self.channel = 1
         self.power = 1
+        self.modulation_rate = 1
 
     @wishful_module.bind_function(upis.radio.set_power)
     def set_power(self, power_dBm):
 
-        self.log.info('setting channel(): %s->%s' % (str(self.interface), str(power_dBm)))
+        self.log.info('setting set_power(): %s->%s' % (str(self.wlan_interface), str(power_dBm)))
 
-        cmd_str = 'iw ' + self.interface + ' set txpower fixed ' + str(power_dBm)
+        cmd_str = 'iw dev ' + self.wlan_interface + ' set txpower fixed ' + str(power_dBm) + 'dbm'
 
         try:
             [rcode, sout, serr] = self.run_command(cmd_str)
@@ -70,6 +72,83 @@ class WifiModule(wishful_module.AgentModule):
         self.log.debug("WIFI Module gets channel of interface: {}".format(self.interface))
         return self.channel
 
+    @wishful_module.bind_function(upis.radio.set_modulation_rate)
+    def set_modulation_rate(self, rate_Mbps):
+
+        self.log.info('setting modulation rate(): %s->%s' % (str(self.wlan_interface), str(rate_Mbps)))
+
+        cmd_str = 'iwconfig ' + self.wlan_interface + ' rate ' + str(rate_Mbps) + 'M' + ' fixed'
+
+        try:
+            [rcode, sout, serr] = self.run_command(cmd_str)
+        except Exception as e:
+            fname = inspect.currentframe().f_code.co_name
+            self.log.fatal("An error occurred in %s: %s" % (fname, e))
+            raise exceptions.UPIFunctionExecutionFailedException(func_name=fname, err_msg=str(e))
+
+        self.modulation_rate = rate_Mbps
+
+    @wishful_module.bind_function(upis.wifi.net.set_hostapd_conf)
+    def set_hostapd_conf(self, iface, file_path, channel, essid):
+        self.log.debug("WIFI Module set hostapd configuratin file: {}".format(self.wlan_interface))
+
+        from hostapdconf.parser import HostapdConf
+        from hostapdconf import helpers as ha
+        #read start configuration file
+        conf = HostapdConf(file_path)
+        #set wireless interface
+        ha.set_iface(conf, iface)
+        #set wireless channel
+        ha.set_channel(conf, channel)
+        #set ESSID
+        ha.set_ssid(conf, essid)
+        #write new configuraiton
+        conf.write()
+
+        return True
+
+    @wishful_module.bind_function(upis.wifi.net.start_hostapd)
+    def start_hostapd(self, file_path):
+        self.log.info('start hostapd()')
+
+        cmd_str = 'sudo hostapd -B ' + str(file_path)
+        try:
+            [rcode, sout, serr] = self.run_command(cmd_str)
+            #sp = subprocess.Popen(cmd_str, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+            #out, err = sp.communicate()
+        except Exception as e:
+            fname = inspect.currentframe().f_code.co_name
+            self.log.fatal("An error occurred in %s: %s" % (fname, e))
+            raise exceptions.UPIFunctionExecutionFailedException(func_name=fname, err_msg=str(e))
+
+        self.log.info('start hostapd() completed')
+
+        return True
+
+    @wishful_module.bind_function(upis.wifi.net.stop_hostapd)
+    def stop_hostapd(self):
+        self.log.info('stop hostapd()')
+
+        cmd_str = 'ps aux | grep hostapd | wc -l'
+        try:
+            [rcode, sout, serr] = self.run_command(cmd_str)
+        except Exception as e:
+            fname = inspect.currentframe().f_code.co_name
+            self.log.fatal("An error occurred in %s: %s" % (fname, e))
+            raise exceptions.UPIFunctionExecutionFailedException(func_name=fname, err_msg=str(e))
+
+        if (int(sout)>2):
+            cmd_str = 'sudo killall -9 hostapd'
+            try:
+                [rcode, sout, serr] = self.run_command(cmd_str)
+            except Exception as e:
+                fname = inspect.currentframe().f_code.co_name
+                self.log.fatal("An error occurred in %s: %s" % (fname, e))
+                raise exceptions.UPIFunctionExecutionFailedException(func_name=fname, err_msg=str(e))
+
+        self.log.info('stop hostapd() completed')
+
+        return True
 
     @wishful_module.bind_function(upis.wifi.net.get_info_of_connected_devices)
     def get_info_of_connected_devices(self):
@@ -197,12 +276,43 @@ class WifiModule(wishful_module.AgentModule):
 
 
     @wishful_module.bind_function(upis.wifi.net.connect_to_network)
-    def connect_to_network(self, iface, **kwargs):
+    def connect_to_network(self, iface, ssid):
 
-        ssid = kwargs.get('ssid')
-        self.log.info('connecting via to AP with SSID: %s->%s' % (str(iface), str(ssid)))
+        self.log.info('connecting via to AP with SSID: %s->%s' % (str(self.wlan_interface), str(ssid)))
 
-        cmd_str = 'sudo iwconfig ' + iface + ' essid ' + str(ssid)
+        cmd_str = 'sudo iwconfig ' + str(iface) + ' essid ' + str(ssid)
+
+        try:
+            [rcode, sout, serr] = self.run_command(cmd_str)
+        except Exception as e:
+            fname = inspect.currentframe().f_code.co_name
+            self.log.fatal("An error occurred in %s: %s" % (fname, e))
+            raise exceptions.UPIFunctionExecutionFailedException(func_name=fname, err_msg=str(e))
+
+        return True
+
+    @wishful_module.bind_function(upis.wifi.net.network_dump)
+    def network_dump(self, iface):
+
+        self.log.info('dump_network on interface %s' % (str(iface)))
+
+        cmd_str = 'sudo iw dev ' + str(iface) + ' link'
+
+        try:
+            [rcode, sout, serr] = self.run_command(cmd_str)
+        except Exception as e:
+            fname = inspect.currentframe().f_code.co_name
+            self.log.fatal("An error occurred in %s: %s" % (fname, e))
+            raise exceptions.UPIFunctionExecutionFailedException(func_name=fname, err_msg=str(e))
+
+        return sout
+
+    @wishful_module.bind_function(upis.net.set_ip_address)
+    def set_ip_address(self, iface, ip_address):
+
+        self.log.info('setting ip address(): %s->%s' % (str(self.wlan_interface), str(ip_address)))
+
+        cmd_str = 'sudo ifconfig ' + str(iface) + ' ' + str(ip_address)
 
         try:
             [rcode, sout, serr] = self.run_command(cmd_str)
